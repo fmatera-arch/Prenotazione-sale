@@ -18,7 +18,7 @@ def get_google_sheet():
     
     # Apre il foglio (assicurati che il nome sia corretto o usa l'URL)
     # Sostituisci 'Prenotazioni Sale' con il NOME ESATTO del tuo file su Google Drive
-    sh = gc.open("Prenotazioni Sale") 
+    sh = gc.open("Prenotazione Sale") 
     return sh.sheet1
 
 # --- FUNZIONI DI GESTIONE DATI ---
