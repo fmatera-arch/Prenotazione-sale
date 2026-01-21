@@ -39,7 +39,7 @@ def aggiungi_prenotazione(nuova_prenotazione):
     ])
 
 def controlla_sovrapposizione(nuova, esistenti):
-    fmt = "%d-%m-%Y %H:%M"
+    fmt = "%Y-%m-%d %H:%M"
     inizio_nuovo = datetime.strptime(f"{nuova['data']} {nuova['inizio']}", fmt)
     fine_nuovo = datetime.strptime(f"{nuova['data']} {nuova['fine']}", fmt)
 
