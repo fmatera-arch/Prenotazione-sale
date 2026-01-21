@@ -1,52 +1,72 @@
 import streamlit as st
 import pandas as pd
-import json
-import os
+import gspread
 from datetime import datetime, timedelta
 
 # --- CONFIGURAZIONE ---
-FILE_DATI = 'prenotazioni.json'
 SALE = ["Sala Blu", "Sala Verde"]
 ORARIO_APERTURA = 9
 ORARIO_CHIUSURA = 18
 
+# --- CONNESSIONE GOOGLE SHEETS ---
+def get_google_sheet():
+    # Usa le credenziali salvate nei "Secrets" di Streamlit
+    credentials = dict(st.secrets["gcp_service_account"])
+    
+    # Autenticazione
+    gc = gspread.service_account_from_dict(credentials)
+    
+    # Apre il foglio (assicurati che il nome sia corretto o usa l'URL)
+    # Sostituisci 'Prenotazioni Sale' con il NOME ESATTO del tuo file su Google Drive
+    sh = gc.open("Prenotazioni Sale") 
+    return sh.sheet1
+
 # --- FUNZIONI DI GESTIONE DATI ---
 def carica_dati():
-    if not os.path.exists(FILE_DATI):
-        return []
-    with open(FILE_DATI, 'r') as f:
-        return json.load(f)
+    worksheet = get_google_sheet()
+    data = worksheet.get_all_records()
+    return data
 
-def salva_dati(dati):
-    with open(FILE_DATI, 'w') as f:
-        json.dump(dati, f, indent=4)
+def aggiungi_prenotazione(nuova_prenotazione):
+    worksheet = get_google_sheet()
+    # Aggiunge una riga al foglio
+    worksheet.append_row([
+        nuova_prenotazione["nome"],
+        nuova_prenotazione["sala"],
+        nuova_prenotazione["data"],
+        nuova_prenotazione["inizio"],
+        nuova_prenotazione["fine"]
+    ])
 
-def controlla_sovrapposizione(nuova_prenotazione, prenotazioni_esistenti):
-    # Converte stringhe orario in oggetti datetime per il confronto
-    fmt = "%Y-%m-%d %H:%M"
-    inizio_nuovo = datetime.strptime(f"{nuova_prenotazione['data']} {nuova_prenotazione['inizio']}", fmt)
-    fine_nuovo = datetime.strptime(f"{nuova_prenotazione['data']} {nuova_prenotazione['fine']}", fmt)
+def controlla_sovrapposizione(nuova, esistenti):
+    fmt = "%d-%m-%Y %H:%M"
+    inizio_nuovo = datetime.strptime(f"{nuova['data']} {nuova['inizio']}", fmt)
+    fine_nuovo = datetime.strptime(f"{nuova['data']} {nuova['fine']}", fmt)
 
-    for p in prenotazioni_esistenti:
-        if p['sala'] == nuova_prenotazione['sala']:
+    for p in esistenti:
+        if p['sala'] == nuova['sala']:
+            # Verifica che i campi non siano vuoti (sicurezza per righe sporche nel foglio)
+            if not p['data'] or not p['inizio']: continue
+            
             inizio_p = datetime.strptime(f"{p['data']} {p['inizio']}", fmt)
             fine_p = datetime.strptime(f"{p['data']} {p['fine']}", fmt)
             
-            # Logica di sovrapposizione
             if inizio_nuovo < fine_p and fine_nuovo > inizio_p:
-                return True # C'è sovrapposizione
+                return True
     return False
 
-# --- INTERFACCIA UTENTE (STREAMLIT) ---
-st.set_page_config(page_title="Gestione Sale Meeting", layout="wide")
+# --- INTERFACCIA UTENTE ---
+st.set_page_config(page_title="Gestione Sale - Google Sheets", layout="wide")
+st.title("☁️ Prenotazioni Sale (Cloud)")
 
-st.title("📅 Gestione Prenotazioni Sale Meeting")
-st.markdown("Sistema di prenotazione per **Sala Blu** e **Sala Verde**")
+# Caricamento dati (con gestione errori)
+try:
+    prenotazioni = carica_dati()
+except Exception as e:
+    st.error(f"Errore di connessione a Google Sheets: {e}")
+    st.stop()
 
-# Carica i dati
-prenotazioni = carica_dati()
-
-# --- SIDEBAR: NUOVA PRENOTAZIONE ---
+# --- SIDEBAR ---
 with st.sidebar:
     st.header("➕ Nuova Prenotazione")
     nome = st.text_input("Nome Prenotante")
@@ -59,70 +79,48 @@ with st.sidebar:
     with col2:
         ora_fine = st.time_input("Ora Fine", (datetime.now() + timedelta(hours=1)).replace(minute=0, second=0))
 
-    btn_prenota = st.button("Conferma Prenotazione", type="primary")
-
-    if btn_prenota:
+    if st.button("Conferma Prenotazione", type="primary"):
         if ora_inizio >= ora_fine:
-            st.error("Errore: L'ora di fine deve essere dopo l'ora di inizio.")
+            st.error("L'ora di fine deve essere dopo l'ora di inizio.")
         else:
             nuova = {
                 "nome": nome,
                 "sala": sala,
                 "data": str(data),
-                "inizio": str(ora_inizio)[:5], # Prende solo HH:MM
+                "inizio": str(ora_inizio)[:5],
                 "fine": str(ora_fine)[:5]
             }
             
             if controlla_sovrapposizione(nuova, prenotazioni):
-                st.error(f"❌ La {sala} è già occupata in questo orario!")
+                st.error(f"❌ La {sala} è già occupata!")
             else:
-                prenotazioni.append(nuova)
-                salva_dati(prenotazioni)
-                st.success(f"✅ Prenotazione confermata per {nome}!")
-                st.rerun() # Ricarica la pagina per aggiornare la tabella
+                with st.spinner('Salvataggio su Google Sheets in corso...'):
+                    aggiungi_prenotazione(nuova)
+                st.success("✅ Salvato su Google Sheets!")
+                st.rerun()
 
-# --- AREA PRINCIPALE: VISUALIZZAZIONE ---
-
+# --- VISUALIZZAZIONE ---
 col_sx, col_dx = st.columns([2, 1])
 
 with col_sx:
-    st.subheader(f"📅 Disponibilità del giorno: {data.strftime('%d/%m/%Y')}")
-    
-    # Creiamo un DataFrame per visualizzare la giornata
-    df_schedule = pd.DataFrame(index=range(ORARIO_APERTURA, ORARIO_CHIUSURA + 1), columns=SALE)
-    df_schedule = df_schedule.fillna("✅ Libera") # Riempiamo tutto come libero
+    st.subheader(f"📅 Disponibilità: {data.strftime('%d/%m/%Y')}")
+    df_schedule = pd.DataFrame(index=range(ORARIO_APERTURA, ORARIO_CHIUSURA + 1), columns=SALE).fillna("✅ Libera")
 
-    # Riempiamo il tabellone con le prenotazioni del giorno selezionato
-    prenotazioni_giorno = [p for p in prenotazioni if p['data'] == str(data)]
+    prenotazioni_giorno = [p for p in prenotazioni if str(p['data']) == str(data)]
     
     for p in prenotazioni_giorno:
-        h_start = int(p['inizio'].split(':')[0])
-        h_end = int(p['fine'].split(':')[0])
-        # Se l'orario non è "tondo" (es 10:30), arrotondiamo per semplicità visiva in questa demo
-        
-        for h in range(h_start, h_end):
-            if h in df_schedule.index:
-                df_schedule.at[h, p['sala']] = f"🔴 {p['nome']} ({p['inizio']}-{p['fine']})"
+        try:
+            h_start = int(str(p['inizio']).split(':')[0])
+            h_end = int(str(p['fine']).split(':')[0])
+            for h in range(h_start, h_end):
+                if h in df_schedule.index:
+                    df_schedule.at[h, p['sala']] = f"🔴 {p['nome']}"
+        except:
+            pass # Ignora errori di formato nel foglio
 
-    # Mostriamo la tabella colorata
     st.dataframe(df_schedule, use_container_width=True, height=400)
 
 with col_dx:
-    st.subheader("📋 Tutte le prenotazioni future")
+    st.subheader("📋 Lista Completa (da Sheets)")
     if prenotazioni:
-        df_tutti = pd.DataFrame(prenotazioni)
-        # Ordiniamo per data e ora
-        df_tutti = df_tutti.sort_values(by=["data", "inizio"])
-        st.dataframe(
-            df_tutti[["data", "sala", "inizio", "fine", "nome"]], 
-            hide_index=True, 
-            use_container_width=True
-        )
-        
-        # Pulsante per cancellare tutto (Opzionale per test)
-        if st.button("Reset Database (Cancella Tutto)"):
-            salva_dati([])
-            st.warning("Database resettato!")
-            st.rerun()
-    else:
-        st.info("Nessuna prenotazione futura.")
+        st.dataframe(pd.DataFrame(prenotazioni), hide_index=True, use_container_width=True)
